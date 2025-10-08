@@ -29,6 +29,11 @@ if CHANNEL_ACCESS_TOKEN is None or CHANNEL_SECRET is None:
 handler = WebhookHandler(CHANNEL_SECRET)
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 
+# [新功能] 新增一個根目錄路由，專門給 cron-job 服務檢查用
+@app.route("/", methods=['GET'])
+def home():
+    return "OK, translator bot is alive."
+
 # 主路由，接收來自 LINE 的訊息
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -59,7 +64,7 @@ def handle_message(event):
         if detected_lang == 'zh-TW' or detected_lang == 'zh-CN':
             # 翻譯成印尼文
             translated_text = translator.translate(user_message, dest='id').text
-            # [重要修改] 訊息格式包含原文與翻譯
+            # 訊息格式包含原文與翻譯
             reply_message = (
                 f"🇹🇼 原文 (Asli):\n{user_message}\n"
                 f"--------------------\n"
@@ -68,7 +73,7 @@ def handle_message(event):
         elif detected_lang == 'id':
             # 翻譯成繁體中文
             translated_text = translator.translate(user_message, dest='zh-TW').text
-            # [重要修改] 訊息格式包含原文與翻譯
+            # 訊息格式包含原文與翻譯
             reply_message = (
                 f"🇮🇩 Asli (原文):\n{user_message}\n"
                 f"--------------------\n"
@@ -96,3 +101,4 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
