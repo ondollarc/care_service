@@ -3,4 +3,4 @@ line-bot-sdk>=3.0.0
 googletrans==4.0.0-rc1
 gunicorn
 httpx==0.13.3
-google-generativeai
+openai
