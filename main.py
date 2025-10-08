@@ -15,7 +15,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 # 引入翻譯與 AI 函式庫
 from googletrans import Translator
-import openai  # 改為使用 OpenAI 函式庫
+import openai
 
 app = Flask(__name__)
 
@@ -24,7 +24,7 @@ app = Flask(__name__)
 CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '請在這裡填入您的 Channel Access Token')
 CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '請在這裡填入您的 Channel Secret')
 
-# [新功能] OpenAI API 金鑰
+# OpenAI API 金鑰
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '請在這裡填入您的 OpenAI API Key')
 
 # --- 檢查與初始化 ---
@@ -32,13 +32,12 @@ if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
     print('請設定 LINE_CHANNEL_ACCESS_TOKEN 和 LINE_CHANNEL_SECRET 環境變數。')
     sys.exit(1)
 
-# 如果有設定 OpenAI Key 才啟用 AI 功能
 if OPENAI_API_KEY:
     try:
         openai.api_key = OPENAI_API_KEY
     except Exception as e:
         print(f"無法設定 OpenAI API: {e}")
-        OPENAI_API_KEY = None # 如果金鑰有問題，則禁用此功能
+        OPENAI_API_KEY = None
 
 handler = WebhookHandler(CHANNEL_SECRET)
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
@@ -64,25 +63,43 @@ def callback():
 def handle_message(event):
     user_message = event.message.text.strip()
     reply_message = ""
+    translator = Translator()
 
-    # [新功能] 檢查是否觸發 AI 專家模式
+    # 檢查是否觸發 AI 專家模式
     if OPENAI_API_KEY and user_message.startswith("看護助理"):
         question = user_message.replace("看護助理", "").strip()
         
         if not question:
-            reply_message = "請在「看護助理」後面加上您想詢問的照護問題喔！"
+            reply_message = "請在「看護助理」後面加上您想詢問的照護問題喔！\n(Silakan ajukan pertanyaan perawatan Anda setelah '看護助理'!)"
         else:
             try:
-                # 建立一個專業的指令，讓 AI 扮演照護專家的角色
-                system_prompt = (
-                    "您是一位非常有經驗的中風病人照護專家，特別了解如何指導外籍看護。 "
-                    "請用繁體中文，以非常親切、有條理且專業的語氣，針對使用者的問題提供具體、可執行的照護建議。 "
-                    "請將重點條列化，讓內容清晰易懂。在適當時機，請提醒看護應注意的風險或觀察重點。"
-                )
+                # [新功能] 偵測問題的語言
+                detected_lang = translator.detect(question).lang
+                
+                system_prompt = ""
+                response_lang_instruction = ""
 
-                # 使用 OpenAI ChatCompletion API
+                if detected_lang in ['zh-TW', 'zh-CN']:
+                    # 如果是中文問題，要求 AI 用繁體中文回答
+                    system_prompt = (
+                        "您是一位非常有經驗的中風病人照護專家，特別了解如何指導外籍看護。 "
+                        "請用繁體中文，以非常親切、有條理且專業的語氣，針對使用者的問題提供具體、可執行的照護建議。 "
+                        "請將重點條列化，讓內容清晰易懂。在適當時機，請提醒看護應注意的風險或觀察重點。"
+                    )
+                    response_lang_instruction = " (Saran Ahli Perawatan)"
+                else:
+                    # 如果是其他語言 (預設為印尼文)，要求 AI 用印尼文回答
+                    system_prompt = (
+                        "You are a highly experienced stroke patient care expert who specializes in guiding foreign caregivers. "
+                        "Please respond in Bahasa Indonesia with a very friendly, organized, and professional tone. "
+                        "Provide specific, actionable care advice for the user's question. "
+                        "Please use bullet points for key takeaways to make the content clear and easy to understand. "
+                        "When appropriate, remind the caregiver of potential risks or key observation points."
+                    )
+                    response_lang_instruction = " (照護專家建議)"
+
                 response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",  # 您也可以更換為 gpt-4 等其他模型
+                    model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": question}
@@ -90,18 +107,26 @@ def handle_message(event):
                 )
                 expert_advice = response.choices[0].message['content']
                 
-                reply_message = (
-                    f"💡 照護專家建議 (Saran Ahli Perawatan):\n"
-                    f"--------------------\n"
-                    f"{expert_advice}"
-                )
+                # 根據提問語言，決定回覆的標題
+                if detected_lang in ['zh-TW', 'zh-CN']:
+                    reply_message = (
+                        f"💡 照護專家建議{response_lang_instruction}:\n"
+                        f"--------------------\n"
+                        f"{expert_advice}"
+                    )
+                else:
+                    reply_message = (
+                        f"💡 Saran Ahli Perawatan{response_lang_instruction}:\n"
+                        f"--------------------\n"
+                        f"{expert_advice}"
+                    )
+
             except Exception:
                 print(traceback.format_exc())
-                reply_message = "抱歉，專家系統暫時無法連線，請稍後再試。"
+                reply_message = "抱歉，專家系統暫時無法連線，請稍後再試。\n(Maaf, sistem ahli tidak dapat terhubung saat ini, silakan coba lagi nanti.)"
     else:
         # 維持原有的翻譯功能
         try:
-            translator = Translator()
             detected_lang = translator.detect(user_message).lang
 
             if detected_lang in ['zh-TW', 'zh-CN']:
@@ -127,7 +152,6 @@ def handle_message(event):
                 )
         except Exception:
             print(traceback.format_exc())
-            # 翻譯失敗時不回覆，避免干擾
             return
 
     # 統一發送回覆訊息
@@ -144,4 +168,3 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
