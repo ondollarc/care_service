@@ -13,100 +13,128 @@ from linebot.v3.messaging import (
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
-# 引入 googletrans 翻譯函式庫
+# 引入翻譯與 AI 函式庫
 from googletrans import Translator
+import google.generativeai as genai
 
 app = Flask(__name__)
 
-# 從環境變數讀取金鑰，若找不到則使用您填寫的預設值
+# --- 金鑰設定 ---
+# LINE Bot 金鑰
 CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '請在這裡填入您的 Channel Access Token')
 CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '請在這裡填入您的 Channel Secret')
 
-if CHANNEL_ACCESS_TOKEN is None or CHANNEL_SECRET is None:
-    print('Specify LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET as environment variables.')
+# [新功能] Google Gemini API 金鑰
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '請在這裡填入您的 Gemini API Key')
+
+# --- 檢查與初始化 ---
+if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
+    print('請設定 LINE_CHANNEL_ACCESS_TOKEN 和 LINE_CHANNEL_SECRET 環境變數。')
     sys.exit(1)
+
+# 如果有設定 Gemini Key 才啟用 AI 功能
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"無法設定 Gemini API: {e}")
+        GEMINI_API_KEY = None # 如果金鑰有問題，則禁用此功能
 
 handler = WebhookHandler(CHANNEL_SECRET)
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 
-# [新功能] 新增一個根目錄路由，專門給 cron-job 服務檢查用
+# --- 路由設定 ---
 @app.route("/", methods=['GET'])
 def home():
     return "OK, translator bot is alive."
 
-# 主路由，接收來自 LINE 的訊息
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
     app.logger.info("Request body: " + body)
-
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
     return 'OK'
 
-# 處理文字訊息的函式
+# --- 核心邏輯 ---
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    user_message = event.message.text
+    user_message = event.message.text.strip()
     reply_message = ""
 
-    try:
-        # 每次收到訊息時，都重新建立一個 Translator 物件
-        # 這可以提高 googletrans 函式庫的穩定性，避免因連線問題導致的無聲失敗
-        translator = Translator()
-
-        # 偵測語言
-        detected_lang = translator.detect(user_message).lang
-
-        if detected_lang == 'zh-TW' or detected_lang == 'zh-CN':
-            # 翻譯成印尼文
-            translated_text = translator.translate(user_message, dest='id').text
-            # 訊息格式包含原文與翻譯
-            reply_message = (
-                f"🇹🇼 原文 (Asli):\n{user_message}\n"
-                f"--------------------\n"
-                f"🇮🇩 翻譯 (Terjemahan):\n{translated_text}"
-            )
-        elif detected_lang == 'id':
-            # 翻譯成繁體中文
-            translated_text = translator.translate(user_message, dest='zh-TW').text
-            # 訊息格式包含原文與翻譯
-            reply_message = (
-                f"🇮🇩 Asli (原文):\n{user_message}\n"
-                f"--------------------\n"
-                f"🇹🇼 Terjemahan (中文翻譯):\n{translated_text}"
-            )
-        elif detected_lang == 'en':
-            # [新功能] 翻譯成印尼文
-            translated_text = translator.translate(user_message, dest='id').text
-            # 訊息格式包含原文與翻譯
-            reply_message = (
-                f"🇬🇧 Original (Asli):\n{user_message}\n"
-                f"--------------------\n"
-                f"🇮🇩 Translation (Terjemahan):\n{translated_text}"
-            )
+    # [新功能] 檢查是否觸發 AI 專家模式
+    if GEMINI_API_KEY and user_message.startswith("看護助理"):
+        question = user_message.replace("看護助理", "").strip()
         
-        # 如果有成功產生翻譯訊息，才進行回覆
-        if reply_message:
-            with ApiClient(configuration) as api_client:
-                line_bot_api = MessagingApi(api_client)
-                line_bot_api.reply_message_with_http_info(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=reply_message)]
-                    )
+        if not question:
+            reply_message = "請在「看護助理」後面加上您想詢問的照護問題喔！"
+        else:
+            try:
+                model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                # 建立一個專業的指令，讓 AI 扮演照護專家的角色
+                prompt = (
+                    "您是一位非常有經驗的中風病人照護專家，特別了解如何指導外籍看護。 "
+                    "請用繁體中文，以非常親切、有條理且專業的語氣，針對以下問題提供具體、可執行的照護建議。 "
+                    "請將重點條列化，讓內容清晰易懂。在適當時機，請提醒看護應注意的風險或觀察重點。\n\n"
+                    f"看護的問題是：「{question}」"
                 )
+                response = model.generate_content(prompt)
+                expert_advice = response.text
+                
+                reply_message = (
+                    f"💡 照護專家建議 (Saran Ahli Perawatan):\n"
+                    f"--------------------\n"
+                    f"{expert_advice}"
+                )
+            except Exception:
+                print(traceback.format_exc())
+                reply_message = "抱歉，專家系統暫時無法連線，請稍後再試。"
+    else:
+        # 維持原有的翻譯功能
+        try:
+            translator = Translator()
+            detected_lang = translator.detect(user_message).lang
 
-    except Exception as e:
-        # 當發生任何錯誤時，在 Render 的日誌中印出詳細的錯誤訊息
-        # 這將幫助我們未來能準確地找到問題
-        print("An error occurred during translation or reply:")
-        print(traceback.format_exc())
+            if detected_lang in ['zh-TW', 'zh-CN']:
+                translated_text = translator.translate(user_message, dest='id').text
+                reply_message = (
+                    f"🇹🇼 原文 (Asli):\n{user_message}\n"
+                    f"--------------------\n"
+                    f"🇮🇩 翻譯 (Terjemahan):\n{translated_text}"
+                )
+            elif detected_lang == 'id':
+                translated_text = translator.translate(user_message, dest='zh-TW').text
+                reply_message = (
+                    f"🇮🇩 Asli (原文):\n{user_message}\n"
+                    f"--------------------\n"
+                    f"🇹🇼 Terjemahan (中文翻譯):\n{translated_text}"
+                )
+            elif detected_lang == 'en':
+                translated_text = translator.translate(user_message, dest='id').text
+                reply_message = (
+                    f"🇬🇧 Original (Asli):\n{user_message}\n"
+                    f"--------------------\n"
+                    f"🇮🇩 Translation (Terjemahan):\n{translated_text}"
+                )
+        except Exception:
+            print(traceback.format_exc())
+            # 翻譯失敗時不回覆，避免干擾
+            return
 
-# 讓 gunicorn 可以執行
+    # 統一發送回覆訊息
+    if reply_message:
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message_with_http_info(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=reply_message)]
+                )
+            )
+
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
