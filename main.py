@@ -79,6 +79,15 @@ def handle_message(event):
                 f"--------------------\n"
                 f"🇹🇼 Terjemahan (中文翻譯):\n{translated_text}"
             )
+        elif detected_lang == 'en':
+            # [新功能] 翻譯成印尼文
+            translated_text = translator.translate(user_message, dest='id').text
+            # 訊息格式包含原文與翻譯
+            reply_message = (
+                f"🇬🇧 Original (Asli):\n{user_message}\n"
+                f"--------------------\n"
+                f"🇮🇩 Translation (Terjemahan):\n{translated_text}"
+            )
         
         # 如果有成功產生翻譯訊息，才進行回覆
         if reply_message:
@@ -101,4 +110,3 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
