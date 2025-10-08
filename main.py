@@ -65,15 +65,30 @@ def handle_message(event):
     reply_message = ""
     translator = Translator()
 
+    # [新功能] 定義觸發 AI 的關鍵字 (中文與印尼文)
+    trigger_keyword_ch = "看護助理"
+    trigger_keyword_id = "Asisten Perawat"
+
+    question = ""
+    is_ai_request = False
+
+    # 統一檢查關鍵字 (不分大小寫)
+    user_message_lower = user_message.lower()
+    if user_message_lower.startswith(trigger_keyword_ch): # 中文關鍵字通常大小寫固定，但以防萬一
+        is_ai_request = True
+        question = user_message[len(trigger_keyword_ch):].strip()
+    elif user_message_lower.startswith(trigger_keyword_id.lower()):
+        is_ai_request = True
+        question = user_message[len(trigger_keyword_id):].strip()
+
     # 檢查是否觸發 AI 專家模式
-    if OPENAI_API_KEY and user_message.startswith("看護助理"):
-        question = user_message.replace("看護助理", "").strip()
+    if OPENAI_API_KEY and is_ai_request:
         
         if not question:
-            reply_message = "請在「看護助理」後面加上您想詢問的照護問題喔！\n(Silakan ajukan pertanyaan perawatan Anda setelah '看護助理'!)"
+            reply_message = "請在「看護助理」或「Asisten Perawat」後面加上您想詢問的照護問題喔！\n(Silakan ajukan pertanyaan perawatan Anda setelah '看護助理' atau 'Asisten Perawat'!)"
         else:
             try:
-                # [新功能] 偵測問題的語言
+                # 偵測問題的語言
                 detected_lang = translator.detect(question).lang
                 
                 system_prompt = ""
@@ -168,3 +183,4 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
