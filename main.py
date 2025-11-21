@@ -42,6 +42,47 @@ if OPENAI_API_KEY:
 handler = WebhookHandler(CHANNEL_SECRET)
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 
+# --- 輔助函式：AI 智慧翻譯 ---
+def ai_translate(text, source_lang, target_lang):
+    """
+    使用 OpenAI 進行智慧翻譯
+    特色：針對中文翻印尼文，會自動加上祝福語。
+    """
+    if not OPENAI_API_KEY:
+        raise Exception("No OpenAI Key")
+
+    system_prompt = ""
+    
+    if source_lang == 'zh-TW' and target_lang == 'id':
+        # [修改點 1] 中文 -> 印尼文：要求通順並加上祝福
+        system_prompt = (
+            "You are a warm and professional translator. "
+            "Translate the following Traditional Chinese text into natural, polite, and fluent Indonesian (Bahasa Indonesia). "
+            "Context: Communication between a Taiwanese employer and an Indonesian caregiver. "
+            "IMPORTANT: At the end of the translation, automatically add a short, culturally appropriate Indonesian blessing or encouraging phrase based on the context (e.g., 'Semoga sehat selalu', 'Tetap semangat', 'Terima kasih banyak'). "
+            "Output only the translation followed by the blessing."
+        )
+    elif source_lang == 'id' and target_lang == 'zh-TW':
+        # 印尼文 -> 中文：要求精準理解口語
+        system_prompt = (
+            "You are a professional translator specializing in Indonesian to Traditional Chinese (Taiwan). "
+            "The input text may be informal Indonesian (Bahasa Gaul) or contain typos. "
+            "Please interpret the intent correctly and translate it into natural, fluent Traditional Chinese suitable for daily communication. "
+            "Do not explain, just provide the translation."
+        )
+    else:
+        system_prompt = f"Translate the following text from {source_lang} to {target_lang}. Output only the translation."
+
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
+        ],
+        temperature=0.4, # 稍微增加一點創意，讓祝福語自然
+    )
+    return response.choices[0].message['content'].strip()
+
 # --- 路由設定 ---
 @app.route("/", methods=['GET'])
 def home():
@@ -65,53 +106,64 @@ def handle_message(event):
     reply_message = ""
     translator = Translator()
 
-    # [新功能] 定義觸發 AI 的關鍵字 (中文與印尼文)
+    # 定義觸發 AI 的關鍵字
     trigger_keyword_ch = "看護助理"
     trigger_keyword_id = "Asisten Perawat"
 
     question = ""
     is_ai_request = False
 
-    # 統一檢查關鍵字 (不分大小寫)
     user_message_lower = user_message.lower()
-    if user_message_lower.startswith(trigger_keyword_ch): # 中文關鍵字通常大小寫固定，但以防萬一
+    if user_message_lower.startswith(trigger_keyword_ch): 
         is_ai_request = True
         question = user_message[len(trigger_keyword_ch):].strip()
     elif user_message_lower.startswith(trigger_keyword_id.lower()):
         is_ai_request = True
         question = user_message[len(trigger_keyword_id):].strip()
 
-    # 檢查是否觸發 AI 專家模式
+    # --- 模式 A: AI 全能助理模式 (擴充功能) ---
     if OPENAI_API_KEY and is_ai_request:
-        
         if not question:
-            reply_message = "請在「看護助理」或「Asisten Perawat」後面加上您想詢問的照護問題喔！\n(Silakan ajukan pertanyaan perawatan Anda setelah '看護助理' atau 'Asisten Perawat'!)"
+            reply_message = (
+                "我是您的全能生活與照護助理！\n"
+                "您可以問我照護問題、生活大小事，甚至叫我講笑話喔！\n\n"
+                "Halo! Saya asisten kehidupan dan perawatan Anda. "
+                "Anda bisa bertanya tentang perawatan, kehidupan sehari-hari, atau minta saya bercanda!"
+            )
         else:
             try:
-                # 偵測問題的語言
                 detected_lang = translator.detect(question).lang
                 
                 system_prompt = ""
                 response_lang_instruction = ""
 
+                # [修改點 2] 擴充 System Prompt：涵蓋照護、生活、笑話、幽默感
+                base_persona = (
+                    "You are a warm, humorous, and professional home care assistant. "
+                    "Your primary expertise is stroke patient care, but you are also a general life assistant. "
+                    "You can answer questions about daily life (groceries, household tips), tell jokes to lighten the mood, and provide emotional support. "
+                    "Tone: Friendly, encouraging, and polite."
+                )
+
                 if detected_lang in ['zh-TW', 'zh-CN']:
-                    # 如果是中文問題，要求 AI 用繁體中文回答
                     system_prompt = (
-                        "您是一位非常有經驗的中風病人照護專家，特別了解如何指導外籍看護。 "
-                        "請用繁體中文，以非常親切、有條理且專業的語氣，針對使用者的問題提供具體、可執行的照護建議。 "
-                        "請將重點條列化，讓內容清晰易懂。在適當時機，請提醒看護應注意的風險或觀察重點。"
+                        f"{base_persona} "
+                        "請用繁體中文回答。如果是照護問題，請提供專業且條理分明的建議；"
+                        "如果是要求講笑話，請提供一個適合台灣家庭的幽默笑話；"
+                        "如果是生活問題，請給予實用的生活小撇步。"
                     )
-                    response_lang_instruction = " (Saran Ahli Perawatan)"
+                    response_lang_instruction = " (生活與照護助理)"
                 else:
-                    # 如果是其他語言 (預設為印尼文)，要求 AI 用印尼文回答
+                    # 針對印尼語使用者的 Prompt
                     system_prompt = (
-                        "You are a highly experienced stroke patient care expert who specializes in guiding foreign caregivers. "
-                        "Please respond in Bahasa Indonesia with a very friendly, organized, and professional tone. "
-                        "Provide specific, actionable care advice for the user's question. "
-                        "Please use bullet points for key takeaways to make the content clear and easy to understand. "
-                        "When appropriate, remind the caregiver of potential risks or key observation points."
+                        f"{base_persona} "
+                        "Please respond in Bahasa Indonesia. "
+                        "If it's a care question, provide clear, actionable advice using bullet points. "
+                        "If asked for a joke, tell a funny, culturally appropriate Indonesian joke. "
+                        "If it's a daily life question, give practical tips. "
+                        "Always be encouraging."
                     )
-                    response_lang_instruction = " (照護專家建議)"
+                    response_lang_instruction = " (Asisten Harian & Perawatan)"
 
                 response = openai.ChatCompletion.create(
                     model="gpt-3.5-turbo",
@@ -122,54 +174,58 @@ def handle_message(event):
                 )
                 expert_advice = response.choices[0].message['content']
                 
-                # 根據提問語言，決定回覆的標題
-                if detected_lang in ['zh-TW', 'zh-CN']:
-                    reply_message = (
-                        f"💡 照護專家建議{response_lang_instruction}:\n"
-                        f"--------------------\n"
-                        f"{expert_advice}"
-                    )
-                else:
-                    reply_message = (
-                        f"💡 Saran Ahli Perawatan{response_lang_instruction}:\n"
-                        f"--------------------\n"
-                        f"{expert_advice}"
-                    )
+                reply_message = f"💡 {response_lang_instruction}:\n--------------------\n{expert_advice}"
 
             except Exception:
                 print(traceback.format_exc())
-                reply_message = "抱歉，專家系統暫時無法連線，請稍後再試。\n(Maaf, sistem ahli tidak dapat terhubung saat ini, silakan coba lagi nanti.)"
+                reply_message = "抱歉，助理目前有點忙線中，請稍後再試。\n(Maaf, asisten sedang sibuk, silakan coba lagi nanti.)"
+    
+    # --- 模式 B: 一般翻譯模式 (含祝福功能) ---
     else:
-        # 維持原有的翻譯功能
         try:
-            detected_lang = translator.detect(user_message).lang
-
+            detected = translator.detect(user_message)
+            detected_lang = detected.lang
+            
+            target_text = ""
+            
             if detected_lang in ['zh-TW', 'zh-CN']:
-                translated_text = translator.translate(user_message, dest='id').text
+                # 中文 -> 印尼文 (AI 會自動加祝福)
+                try:
+                    target_text = ai_translate(user_message, 'zh-TW', 'id')
+                except:
+                    target_text = translator.translate(user_message, dest='id').text
+                
                 reply_message = (
                     f"🇹🇼 原文 (Asli):\n{user_message}\n"
                     f"--------------------\n"
-                    f"🇮🇩 翻譯 (Terjemahan):\n{translated_text}"
+                    f"🇮🇩 翻譯 (Terjemahan):\n{target_text}"
                 )
+
             elif detected_lang == 'id':
-                translated_text = translator.translate(user_message, dest='zh-TW').text
+                # 印尼文 -> 中文
+                try:
+                    target_text = ai_translate(user_message, 'id', 'zh-TW')
+                except:
+                    target_text = translator.translate(user_message, dest='zh-TW').text
+
                 reply_message = (
                     f"🇮🇩 Asli (原文):\n{user_message}\n"
                     f"--------------------\n"
-                    f"🇹🇼 Terjemahan (中文翻譯):\n{translated_text}"
+                    f"🇹🇼 Terjemahan (中文翻譯):\n{target_text}"
                 )
+
             elif detected_lang == 'en':
-                translated_text = translator.translate(user_message, dest='id').text
+                target_text = translator.translate(user_message, dest='id').text
                 reply_message = (
                     f"🇬🇧 Original (Asli):\n{user_message}\n"
                     f"--------------------\n"
-                    f"🇮🇩 Translation (Terjemahan):\n{translated_text}"
+                    f"🇮🇩 Translation (Terjemahan):\n{target_text}"
                 )
+                
         except Exception:
             print(traceback.format_exc())
             return
 
-    # 統一發送回覆訊息
     if reply_message:
         with ApiClient(configuration) as api_client:
             line_bot_api = MessagingApi(api_client)
@@ -183,4 +239,3 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
